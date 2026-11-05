@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+*.db
+*.sqlite
+*.sqlite3
+wasl-uploads/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+*.log
+backup/
+.idea/

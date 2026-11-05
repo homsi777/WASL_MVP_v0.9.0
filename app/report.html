@@ -1,0 +1,24 @@
+<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير استشارة {{ c.code }}</title>
+<link rel="stylesheet" href="/static/print.css"></head><body>
+<div class="screen"><button id="printReportBtn">طباعة / حفظ PDF</button></div>
+<header class="top"><div><div class="report-brand"><img src="/static/wasl-logo.webp" alt="شعار وَصل"><strong>WASL | وَصل</strong></div><div class="small">شبكة الاستشارات الطبية بين المشافي</div><h1>تقرير استشارة طبية</h1></div><div class="report-code">رقم التقرير<br><strong>{{ c.code }}</strong><br><span class="small">تم إنشاء النسخة: {{ print_at }}</span></div></header>
+{% if c.status != 'closed' %}<div class="warning">مسودة غير نهائية — الاستشارة لم تغلق بعد، ولا تُعتمد كجواب نهائي</div>{% endif %}
+<div class="meta">
+<div><div class="label">اسم المريض</div><strong>{{ c.patient_name }}</strong></div>
+<div><div class="label">معرف المريض / الملف</div>{{ c.patient_ref }}</div>
+<div><div class="label">العمر</div>{{ c.patient_age or 'غير مدخل' }}</div>
+<div><div class="label">القسم والطابق / الوحدة</div>{{ origin.name }} — {{ c.floor }} {{ c.unit }}</div>
+<div><div class="label">الجهة الطالبة</div>{{ origin.hospital }} / {{ origin.name }}</div>
+<div><div class="label">القسم المسؤول عن الرد</div>{{ destination.hospital }} / {{ destination.name }}</div>
+<div><div class="label">الطبيب منشئ الطلب</div>{{ created_by }}</div>
+<div><div class="label">الأطباء الطالبون</div>{{ c.requested_doctors or created_by }}</div>
+<div><div class="label">الأولوية</div>{{ {'routine':'اعتيادية','urgent':'عاجلة','emergency':'إسعافية'}[c.priority] }}</div>
+<div><div class="label">وقت الطلب</div>{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+</div>
+<h2>ملخص القصة السريرية</h2><div class="content">{{ c.clinical_summary }}</div>
+<h2>سؤال الاستشارة</h2><div class="content">{{ c.question }}</div>
+<h2>المراسلات والجواب الطبي</h2>
+{% for e in events %}<div class="event"><div class="small">{{ e.at }} | {{ e.author }} — {{ e.department }} | {{ e.type }}</div><div class="event-description">{{ e.body or 'تم إنجاز الإجراء' }}</div></div>{% endfor %}
+<div class="sign"><div>اسم الطبيب الذي أنهى الرد وتوقيعه: ____________________</div><div>مراجعة وإغلاق من القسم الطالب: {{ closed_by or 'لم يغلق بعد' }}<br>التوقيع: ____________________</div></div>
+<footer class="foot">نسخة {{ 'نهائية' if c.status=='closed' else 'غير نهائية' }} | {{ c.code }} | الطباعة لا تعني توقيعاً إلكترونياً معتمداً. ينصح بالتحقق من مطابقة البيانات مع الملف الورقي.</footer>
+<script src="/static/print.js" defer></script></body></html>

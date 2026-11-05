@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - wasl_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 8s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      UPLOAD_DIR: /app/uploads
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      CLINICAL_TIMEZONE: ${CLINICAL_TIMEZONE:-Asia/Damascus}
+      SLA_MINUTES_ROUTINE: ${SLA_MINUTES_ROUTINE:-0}
+      SLA_MINUTES_URGENT: ${SLA_MINUTES_URGENT:-0}
+      SLA_MINUTES_EMERGENCY: ${SLA_MINUTES_EMERGENCY:-0}
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${APP_PORT:-8080}:8000"
+    volumes:
+      - wasl_uploads:/app/uploads
+    networks: [internal]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz', timeout=3).read()"]
+      interval: 20s
+      timeout: 6s
+      retries: 5
+volumes:
+  wasl_db:
+  wasl_uploads:
+networks:
+  internal:
+    driver: bridge

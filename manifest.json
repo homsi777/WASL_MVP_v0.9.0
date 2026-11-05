@@ -1,0 +1,107 @@
+{
+  "project": "WASL",
+  "version": "0.6.0",
+  "build": "manual-unit-and-requester-per-consultation",
+  "files": [
+    {
+      "path": ".env.example",
+      "sha256": "75670cd8329c3c0eea42c3082b823e4a9beba0d7bd408d1153bb4bceb3dbf05c"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "7fcdb9377b55022d90b5870a429e6dc84509612431c984589e79231e3f44ce81"
+    },
+    {
+      "path": "CHANGELOG_V0.6_AR.md",
+      "sha256": "bf035e55cb3fc4da99e95d70dd709c44b1a7b0b7a31315e6c7f4bbbfd3d3a066"
+    },
+    {
+      "path": "DEPARTMENT_MANAGEMENT_AR.md",
+      "sha256": "7bb9809aea120e067286bba3bd3935eae9538ea1839111f7b30d12ad65085f6c"
+    },
+    {
+      "path": "Dockerfile",
+      "sha256": "85a1b5f1289787e16e821e1c59d6c0242f266ca82d382ae313b85662a9804422"
+    },
+    {
+      "path": "NETWORK_DEPLOYMENT_AR.md",
+      "sha256": "b1764b805a11eb5d36e6674254abd7598ae0ed3798d9085c00cc33aeacd64b98"
+    },
+    {
+      "path": "README_AR.md",
+      "sha256": "9104252dad60d54a770c62cd73c018744c9655c525d33ee869fafeda002bfe2a"
+    },
+    {
+      "path": "SECURITY_BEFORE_CLINICAL_LAUNCH_AR.md",
+      "sha256": "ba9a12f9f80d01a38a9c7875dff047e760d98fd4bcdc0df035e9360fb1b674f9"
+    },
+    {
+      "path": "START_HERE_AR.md",
+      "sha256": "60ff79f02372862694fbf1c2c0176b537ccc63af1dda90ffd88585430f4c2d6f"
+    },
+    {
+      "path": "TEST_RESULTS_AR.md",
+      "sha256": "5c341eb3aec95ee575957059f5effddf1926b7ad0d5c90d48d069443c9bb8fc3"
+    },
+    {
+      "path": "UNIVERSITY_IT_CONNECTIVITY_OPTIONS_AR.md",
+      "sha256": "be4f6d05d402f7e36c344c29eadee35ac41f57fd978bc40c7bc53cd07caf9e3a"
+    },
+    {
+      "path": "app/db.py",
+      "sha256": "085084e500189c6e372477536cec8f847a96e5391c75ebe8b0330945a28f238d"
+    },
+    {
+      "path": "app/main.py",
+      "sha256": "a5ae0ea83612df1a7f6aa0d15e9df7e4fb36415dfe04153314cff464d6f94c95"
+    },
+    {
+      "path": "app/models.py",
+      "sha256": "6be35a744d8cb10a8ecb0ebffcd26e6c7e5e8cd008c858616f8434423b401f89"
+    },
+    {
+      "path": "app/report.html",
+      "sha256": "380e4466a392468392e39a466727e142e109523051560bf9853ed955c01be160"
+    },
+    {
+      "path": "app/static/app.js",
+      "sha256": "0e6e098b875e8d9f303f7b6fa298726443f2076996962f0031f0bea069c3d26e"
+    },
+    {
+      "path": "app/static/index.html",
+      "sha256": "cf8e84f3e76368b3c7fefddb62fcd77d0d9f903893a53854f210b3db1a0e9c3f"
+    },
+    {
+      "path": "app/static/print.css",
+      "sha256": "252918a399e55bdda20e59a18441a222dcc0ee6c3fa233682b7cd523499ce3c1"
+    },
+    {
+      "path": "app/static/print.js",
+      "sha256": "df09cf507a508f636bbd381709c3ef86d7438c3f8bb565d6abb819be1c35dec0"
+    },
+    {
+      "path": "app/static/styles.css",
+      "sha256": "7bccac45847c69ebd4e62e7bef4078485f7a99c47f11adf933ebf7979b6928c8"
+    },
+    {
+      "path": "compose.yaml",
+      "sha256": "708081fece1e54ed73d9699205331da62460019ba385a6f371f5e774fe99f543"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "f06e66a79ba5ac33d1f320a89d449bfa82201a1e093824eba10f0e2dae1f7a1d"
+    },
+    {
+      "path": "scripts/bootstrap.py",
+      "sha256": "1ae5b5639f24553d6d5c7ca5ed95b1704b2c977df7cca26277e970d24cfddbd9"
+    },
+    {
+      "path": "scripts/create_admin.py",
+      "sha256": "f8d85fbfe694b4d67a65f8b05e432dcb4f80a1369a822ab2976c1c4d0b04e2b1"
+    },
+    {
+      "path": "tests/test_workflows.py",
+      "sha256": "e39238803ab877975db89d9e6dbf76c1c985439b76fca564b8b507496021b31f"
+    }
+  ]
+}

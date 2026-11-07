@@ -246,3 +246,75 @@ def test_free_text_unit_and_per_consultation_requester(setup):
         assert ob.call('POST','/api/consultations',spaces).status_code==422
     finally:
         ob.close();intern.close()
+
+
+def test_complete_requires_fresh_reply_after_info_round_and_no_text_bypass(setup):
+    client, ids = setup
+    ob = Actor(client, 'ob', ids['ob'])
+    intern = Actor(client, 'in', ids['in'])
+    try:
+        c = create(ob, ids['in'])
+        assert intern.call('POST', f'/api/consultations/{c}/actions',
+                           {'action': 'reply', 'body': 'جواب أولي طويل وواضح'}).status_code == 200
+        assert intern.call('POST', f'/api/consultations/{c}/actions',
+                           {'action': 'request_info', 'body': 'أرسل معلومات إضافية'}).status_code == 200
+        assert ob.call('POST', f'/api/consultations/{c}/actions',
+                       {'action': 'provide_info', 'body': 'معلومات سريرية إضافية تجريبية'}).status_code == 200
+        # The previously saved reply is stale. Supplying text in complete must not bypass the guard.
+        r = intern.call('POST', f'/api/consultations/{c}/actions',
+                        {'action': 'complete', 'body': 'إنهاء دون رد جديد'})
+        assert r.status_code == 422, r.text
+        assert intern.call('POST', f'/api/consultations/{c}/actions',
+                           {'action': 'reply', 'body': 'جواب جديد بعد وصول المعلومات الإضافية'}).status_code == 200
+        assert intern.call('POST', f'/api/consultations/{c}/actions',
+                           {'action': 'complete'}).status_code == 200
+    finally:
+        ob.close()
+        intern.close()
+
+def test_hourly_roster_weekly_day_override_and_permissions(setup):
+    client, ids = setup
+    intern=Actor(client,'in',ids['in']); ob=Actor(client,'ob',ids['ob']); other=Actor(client,'surg',ids['surg'])
+    try:
+        did=ids['in']; date_value='2026-11-10'  # Tuesday, weekday=1
+        weekly={'slots':[
+            {'doctor_name':'د. أحمد','phone':'0933000000','start':'09:00','end':'15:00','contact_role':'primary'},
+            {'doctor_name':'د. محمد','phone':'0933111111','start':'13:00','end':'21:00','contact_role':'primary'},
+            {'doctor_name':'د. سامر','phone':'0933222222','start':'21:00','end':'09:00','contact_role':'backup'}]}
+        assert other.call('PUT',f'/api/rosters/{did}/weekly/1',weekly).status_code==403
+        w=intern.call('PUT',f'/api/rosters/{did}/weekly/1',weekly)
+        assert w.status_code==200,w.text
+        r=ob.call('GET',f'/api/rosters/{did}?day={date_value}')
+        assert r.status_code==200,r.text
+        v=r.json();assert v['source']=='weekly' and len(v['slots'])==3 and not v['gaps']
+        assert sum(x['start']=='13:00' for x in v['slots'])==1
+        override={'slots':[{'doctor_name':'د. طارق','phone':'0933444444','start':'09:00','end':'09:00','contact_role':'primary'}]}
+        assert intern.call('PUT',f'/api/rosters/{did}/day/{date_value}',override).status_code==200
+        v=ob.call('GET',f'/api/rosters/{did}?day={date_value}').json()
+        assert v['source']=='daily' and len(v['slots'])==1 and v['slots'][0]['end_minute']==1440
+        assert len(ob.call('GET',f'/api/rosters/{did}?day=2026-11-17').json()['slots'])==3
+        assert other.call('DELETE',f'/api/rosters/{did}/day/{date_value}').status_code==403
+        assert intern.call('DELETE',f'/api/rosters/{did}/day/{date_value}').status_code==200
+        assert ob.call('GET',f'/api/rosters/{did}?day={date_value}').json()['source']=='weekly'
+    finally:
+        intern.close();ob.close();other.close()
+
+def test_hourly_roster_gaps_invalid_cross_boundary_and_empty_override(setup):
+    client, ids=setup
+    intern=Actor(client,'in',ids['in']);ob=Actor(client,'ob',ids['ob'])
+    try:
+        did=ids['in'];d='2026-11-11'
+        one={'slots':[{'doctor_name':'د. أحمد','phone':'0933000000','start':'15:00','end':'21:00','contact_role':'primary'}]}
+        assert intern.call('PUT',f'/api/rosters/{did}/day/{d}',one).status_code==200
+        v=ob.call('GET',f'/api/rosters/{did}?day={d}').json()
+        assert v['gaps']==[{'from':'09:00','to':'15:00'},{'from':'21:00','to':'09:00'}]
+        invalid={'slots':[{'doctor_name':'د. أحمد','phone':'0933000000','start':'07:00','end':'11:00'}]}
+        assert intern.call('PUT',f'/api/rosters/{did}/day/{d}',invalid).status_code==422
+        invalid_phone={'slots':[{'doctor_name':'د. أحمد','phone':'ABC','start':'09:00','end':'11:00'}]}
+        assert intern.call('PUT',f'/api/rosters/{did}/day/{d}',invalid_phone).status_code==422
+        assert intern.call('PUT',f'/api/rosters/{did}/day/{d}',{'slots':[]}).status_code==200
+        v=ob.call('GET',f'/api/rosters/{did}?day={d}').json()
+        assert v['source']=='daily' and len(v['slots'])==0
+        assert v['gaps']==[{'from':'09:00','to':'09:00'}]
+    finally:
+        intern.close();ob.close()

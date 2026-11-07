@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
 from .models import (Audit, Attachment, CallLog, Consultation, Contact, Department,
-                     Event, Hospital, HospitalManager, LoginSession, Membership, Transfer, User, Notification, NotificationRead, now)
+                     Event, Hospital, HospitalManager, LoginSession, Membership, Transfer, User, Notification, NotificationRead, RosterSlot, RosterDayOverride, now)
 
 ROOT = Path(__file__).resolve().parent
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./wasl-uploads")).resolve()
@@ -42,7 +42,7 @@ async def lifespan(application):
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     yield
 
-app = FastAPI(title="WASL", version="0.9.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app = FastAPI(title="WASL", version="0.9.2-preview", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 login_failures = defaultdict(deque)
 login_lock = Lock()
@@ -560,11 +560,15 @@ def take_action(consultation_id: int, data:ActionData, req:Request, db:Session=D
     if a in required_body and not body:
         fail(422,"أدخل نص الإجراء")
     if a=="complete":
-        # A prior answer must not satisfy a *new* follow-up cycle. An accepted
-        # transfer also starts a fresh responsibility period for the new service.
+        # Completion requires an independently saved reply AFTER the latest
+        # request/response cycle boundary. A completion note cannot bypass it.
         last_cycle_start = db.scalar(select(Event.id).where(
             Event.consultation_id==c.id,
-            Event.type.in_(["followup_requested", "transfer_accepted"])
+            Event.type.in_([
+                "followup_requested", "transfer_accepted",
+                "information_requested", "investigations_requested",
+                "assessment_requested", "information_provided", "patient_arrived",
+            ])
         ).order_by(Event.id.desc()).limit(1)) or 0
         has_fresh_reply = db.scalar(select(Event.id).where(
             Event.consultation_id==c.id,
@@ -572,8 +576,8 @@ def take_action(consultation_id: int, data:ActionData, req:Request, db:Session=D
             Event.type=="reply",
             Event.id>last_cycle_start
         ).order_by(Event.id.desc()).limit(1))
-        if not has_fresh_reply and not body:
-            fail(422,"يجب إضافة رد جديد ضمن دورة الاستشارة الحالية قبل إنهائها")
+        if not has_fresh_reply:
+            fail(422,"يجب حفظ رد طبي جديد بعد آخر إجراء مطلوب قبل إنهاء الاستشارة")
     if a=="request_info":
         c.action_owner_dept_id=c.requester_dept_id
         c.task="provide_info"
@@ -725,6 +729,164 @@ def download_attachment(attachment_id:int,req:Request,db:Session=Depends(get_db)
     f=UPLOAD_DIR/a.stored_name
     if not f.exists():fail(404,"الملف مفقود من التخزين")
     return FileResponse(f,media_type="application/octet-stream",headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(a.original_name)}"})
+
+
+# --- Consultation contacts roster (weekly template + day-specific override) ---
+class RosterShiftInput(BaseModel):
+    doctor_name: str = Field(min_length=2, max_length=140)
+    phone: str = Field(min_length=6, max_length=40)
+    start: str = Field(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    end: str = Field(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    contact_role: Literal["primary","backup"] = "primary"
+    note: str = Field(default="",max_length=200)
+
+class RosterReplaceInput(BaseModel):
+    slots: list[RosterShiftInput] = Field(default_factory=list,max_length=40)
+
+def roster_department(db, department_id):
+    dept=db.get(Department,department_id)
+    if not dept or not dept.active:fail(404,"القسم غير موجود أو غير فعّال")
+    return dept
+
+def roster_authorized_reader(req,db,department_id):
+    actor=get_user(req,db)
+    if not actor.is_admin:
+        selected_department(req,db,actor)  # active clinical membership required to view contacts
+    return roster_department(db,department_id)
+
+def roster_authorized_writer(req,db,department_id):
+    actor=writing_access(req,db)
+    roster_department(db,department_id)
+    if not actor.is_admin:
+        selected_department(req,db,actor)
+        manager_only(db,actor,department_id)
+    return actor
+
+def minutes_from_clinical_start(hhmm):
+    hr,minute=map(int,hhmm.split(":"))
+    return (hr*60+minute-9*60)%1440
+
+def slot_bounds(shift):
+    start=minutes_from_clinical_start(shift.start)
+    end=minutes_from_clinical_start(shift.end)
+    if shift.start==shift.end:
+        if shift.start != "09:00":fail(422,"مناوبة 24 ساعة مسموحة من 09:00 إلى 09:00 فقط")
+        end=1440
+    elif end==0: end=1440
+    if end<=start:fail(422,"الفترة تتجاوز حدود اليوم الطبي 09:00–09:00؛ قسّمها على يومين")
+    if not re.fullmatch(r"\+?[0-9 ()\-]{6,40}",shift.phone):fail(422,"رقم هاتف المناوبة غير صالح")
+    return start,end
+
+def clock_from_minute(minutes):
+    n=(minutes+9*60)%(24*60)
+    return f"{n//60:02d}:{n%60:02d}"
+
+def roster_public_slot(slot):
+    return {"id":slot.id,"doctor_name":slot.doctor_name,"phone":slot.phone,
+            "start":clock_from_minute(slot.start_minute),"end":clock_from_minute(slot.end_minute),
+            "start_minute":slot.start_minute,"end_minute":slot.end_minute,
+            "contact_role":slot.contact_role,"note":slot.note}
+
+def active_roster_slots(db,dept_id,d):
+    override=db.scalar(select(RosterDayOverride).where(RosterDayOverride.department_id==dept_id,RosterDayOverride.clinical_date==d))
+    source="daily" if override else "weekly"
+    condition=(RosterSlot.clinical_date==d) if override else (RosterSlot.weekday==d.weekday())
+    return (db.scalars(select(RosterSlot).where(RosterSlot.department_id==dept_id,
+                    RosterSlot.kind==source,RosterSlot.active==True,condition)
+             .order_by(RosterSlot.start_minute,RosterSlot.contact_role,RosterSlot.id)).all(),source)
+
+def roster_gap_ranges(slots):
+    intervals=sorted((s.start_minute,s.end_minute) for s in slots)
+    gaps=[];end=0
+    for begin,finish in intervals:
+        if begin>end:gaps.append({"from":clock_from_minute(end),"to":clock_from_minute(begin)})
+        end=max(end,finish)
+    if end<1440:gaps.append({"from":clock_from_minute(end),"to":clock_from_minute(1440)})
+    return gaps
+
+def roster_response(db,dept_id,d):
+    slots,source=active_roster_slots(db,dept_id,d)
+    start,end,day=clinical_window()
+    on_today=(day==d.isoformat())
+    current_min=None
+    if on_today:
+        elapsed=int((now()-start).total_seconds()//60)
+        current_min=max(0,min(1439,elapsed))
+    return {"department_id":dept_id,"clinical_date":d.isoformat(),"timezone":str(CLINICAL_TZ),
+      "source":source,"slots":[roster_public_slot(x) for x in slots],
+      "currently_on_duty":[roster_public_slot(x) for x in slots if current_min is not None and x.start_minute<=current_min<x.end_minute],
+      "gaps":roster_gap_ranges(slots),"has_day_override":source=="daily"}
+
+def roster_date(text_date):
+    try:return date.fromisoformat(text_date)
+    except ValueError:fail(422,"صيغة التاريخ المطلوبة YYYY-MM-DD")
+
+@app.get("/api/rosters/{department_id}")
+def get_roster(department_id:int,req:Request,day:str="",db:Session=Depends(get_db)):
+    roster_authorized_reader(req,db,department_id)
+    d=roster_date(day) if day else date.fromisoformat(clinical_window()[2])
+    return roster_response(db,department_id,d)
+
+@app.get("/api/rosters/{department_id}/weekly/{weekday}")
+def get_roster_weekly(department_id:int,weekday:int,req:Request,db:Session=Depends(get_db)):
+    roster_authorized_reader(req,db,department_id)
+    if not 0<=weekday<=6:fail(422,"اليوم يجب أن يكون بين 0 و6")
+    rows=db.scalars(select(RosterSlot).where(RosterSlot.department_id==department_id,
+      RosterSlot.kind=="weekly",RosterSlot.weekday==weekday,RosterSlot.active==True)
+      .order_by(RosterSlot.start_minute,RosterSlot.id)).all()
+    return {"department_id":department_id,"weekday":weekday,"slots":[roster_public_slot(x) for x in rows],"gaps":roster_gap_ranges(rows)}
+
+def replace_roster(db,actor,department_id,mode,slots,weekday=None,clinical_date=None):
+    if mode=="daily":
+        override=db.scalar(select(RosterDayOverride).where(RosterDayOverride.department_id==department_id,
+                                  RosterDayOverride.clinical_date==clinical_date))
+        if not override:
+            override=RosterDayOverride(department_id=department_id,clinical_date=clinical_date,updated_by=actor.id)
+            db.add(override)
+        else:
+            override.updated_by=actor.id;override.updated_at=now()
+    conditions=[RosterSlot.department_id==department_id,RosterSlot.kind==mode,RosterSlot.active==True]
+    if mode=="weekly":conditions.append(RosterSlot.weekday==weekday)
+    else:conditions.append(RosterSlot.clinical_date==clinical_date)
+    existing=db.scalars(select(RosterSlot).where(*conditions).with_for_update()).all()
+    for old in existing:old.active=False;old.retired_at=now()
+    for shift in slots:
+        begin,finish=slot_bounds(shift)
+        db.add(RosterSlot(department_id=department_id,kind=mode,weekday=weekday if mode=="weekly" else None,
+            clinical_date=clinical_date if mode=="daily" else None,start_minute=begin,end_minute=finish,
+            doctor_name=clean(shift.doctor_name,140),phone=shift.phone,contact_role=shift.contact_role,
+            note=clean(shift.note,200),created_by=actor.id))
+    audit(db,actor.id,"roster_replaced",f"department={department_id}",
+          f"mode={mode};weekday={weekday};date={clinical_date};slots={len(slots)}")
+    db.commit()
+
+@app.put("/api/rosters/{department_id}/weekly/{weekday}")
+def put_weekly_roster(department_id:int,weekday:int,data:RosterReplaceInput,req:Request,db:Session=Depends(get_db)):
+    actor=roster_authorized_writer(req,db,department_id)
+    if not 0<=weekday<=6:fail(422,"اليوم يجب أن يكون بين 0 و6")
+    replace_roster(db,actor,department_id,"weekly",data.slots,weekday=weekday)
+    return get_roster_weekly(department_id,weekday,req,db)
+
+@app.put("/api/rosters/{department_id}/day/{clinical_date}")
+def put_day_roster(department_id:int,clinical_date:str,data:RosterReplaceInput,req:Request,db:Session=Depends(get_db)):
+    actor=roster_authorized_writer(req,db,department_id)
+    d=roster_date(clinical_date)
+    replace_roster(db,actor,department_id,"daily",data.slots,clinical_date=d)
+    return roster_response(db,department_id,d)
+
+@app.delete("/api/rosters/{department_id}/day/{clinical_date}")
+def delete_day_override(department_id:int,clinical_date:str,req:Request,db:Session=Depends(get_db)):
+    actor=roster_authorized_writer(req,db,department_id);d=roster_date(clinical_date)
+    override=db.scalar(select(RosterDayOverride).where(RosterDayOverride.department_id==department_id,
+                                     RosterDayOverride.clinical_date==d))
+    if not override:fail(404,"لا يوجد تعديل يومي لهذا التاريخ")
+    for old in db.scalars(select(RosterSlot).where(RosterSlot.department_id==department_id,
+                      RosterSlot.kind=="daily",RosterSlot.clinical_date==d,RosterSlot.active==True)):
+        old.active=False;old.retired_at=now()
+    db.delete(override)
+    audit(db,actor.id,"roster_override_deleted",f"department={department_id}",d.isoformat())
+    db.commit()
+    return roster_response(db,department_id,d)
 
 @app.get("/api/contacts/{department_id}")
 def contacts(department_id:int,req:Request,db:Session=Depends(get_db)):

@@ -28,7 +28,7 @@ byId('departmentSelect').onchange=async e=>{deptId=Number(e.target.value)||null;
 document.querySelectorAll('[data-view]').forEach(btn=>btn.onclick=()=>navigate(btn.dataset.view));
 function markNav(v){document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===v))}
 async function navigate(v, id=null){view=v;detailId=id;markNav(v);if(!deptId&&!['admin','analytics','departments','account'].includes(v)){if(me?.user.is_admin||directory?.managed_hospital_ids?.length){v='departments';view=v}else{$content().innerHTML='<div class="empty">لا توجد عضوية قسم لهذا المستخدم. اطلب تفعيل الحساب من الإدارة.</div>';return}}$content().innerHTML='<div class="empty">جارٍ تحميل الصفحة…</div>';
- try{if(v==='dashboard')await dashboard();else if(v==='incoming'||v==='outgoing')await list(v);else if(v==='new')await newForm();else if(v==='detail')await detail(id);else if(v==='contacts')await contactsPage();else if(v==='archive')await archivePage();else if(v==='handover')await handoverPage();else if(v==='notifications')await notificationsPage();else if(v==='admin')await adminPage();else if(v==='analytics')await analyticsPage();else if(v==='departments')await hospitalDepartmentsPage();else if(v==='account')await accountPage()}catch(e){$content().innerHTML='<div class="empty">'+safe(e.message)+'</div>'}}
+ try{if(v==='dashboard')await dashboard();else if(v==='incoming'||v==='outgoing')await list(v);else if(v==='new')await newForm();else if(v==='detail')await detail(id);else if(v==='contacts')await contactsPage();else if(v==='roster')await rosterPage();else if(v==='archive')await archivePage();else if(v==='handover')await handoverPage();else if(v==='notifications')await notificationsPage();else if(v==='admin')await adminPage();else if(v==='analytics')await analyticsPage();else if(v==='departments')await hospitalDepartmentsPage();else if(v==='account')await accountPage()}catch(e){$content().innerHTML='<div class="empty">'+safe(e.message)+'</div>'}}
 function heading(title,subtitle,extra=''){return `<div class="page-heading"><div><h1>${safe(title)}</h1><div class="muted">${safe(subtitle||'')}</div></div>${extra}</div>`}
 function stat(v,label,kind='',filter=''){return `<button class="stat ${kind}" ${filter?`data-filter="${safe(filter)}"`:''}><div class="number">${v}</div><div class="stat-label">${safe(label)}</div></button>`}
 async function dashboard(){
@@ -90,10 +90,67 @@ async function detail(id){const r=await api('/api/consultations/'+id),c=r.consul
  if(byId('acceptTransfer'))byId('acceptTransfer').onclick=()=>transferDecision(pending.id,'accept',id);
  if(byId('rejectTransfer'))byId('rejectTransfer').onclick=()=>{const reason=prompt('أدخل سبب رفض التحويل');if(reason)transferDecision(pending.id,'reject',id,reason)};
  if(byId('uploadForm'))byId('uploadForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api('/api/consultations/'+id+'/attachments',{method:'POST',body:f,upload:true});toast('تم رفع الملف');await navigate('detail',id)}catch(err){toast(err.message,true)}};
- byId('showContacts').onclick=async()=>{try{const cs=await api('/api/contacts/'+c.current_dept_id);alert(cs.length?cs.map(x=>x.doctor+' : '+x.phone+' ('+x.category+')').join('\n'):'لم يضف القسم أرقام تواصل بعد.')}catch(e){toast(e.message,true)}};
+ byId('showContacts').onclick=async()=>{try{const roster=await api('/api/rosters/'+c.current_dept_id);let cs=roster.currently_on_duty;let message=cs.length?'مسؤولو التواصل في المناوبة الحالية:\n'+cs.map(x=>x.doctor_name+' – '+x.phone+' ('+x.start+'–'+x.end+')').join('\n'):'لا توجد أرقام مناوبة حالياً؛ ارجع إلى دليل الاتصال العام.';if(!cs.length){const fallback=await api('/api/contacts/'+c.current_dept_id);if(fallback.length)message+='\n'+fallback.map(x=>x.doctor+' : '+x.phone).join('\n')}alert(message)}catch(e){toast(e.message,true)}};
  if(byId('phoneForm'))byId('phoneForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/consultations/'+id+'/calls',{method:'POST',body:Object.fromEntries(new FormData(e.target).entries())});toast('تم توثيق الاتصال');await navigate('detail',id)}catch(err){toast(err.message,true)}};
 }
 async function transferDecision(tid,decision,id,reason=''){try{await api('/api/transfers/'+tid+'/decision',{method:'POST',body:{decision,reason}});toast(decision==='accept'?'تم قبول تحويل المسؤولية':'تم رفض التحويل');await navigate('detail',id)}catch(e){toast(e.message,true)}}
+
+// Live pilot roster management: weekly templates or date-specific overrides.
+let rosterEditDept=null,rosterEditDate='',rosterEditMode='day',rosterDraft=[];
+const hhmmRx=/^([01]\d|2[0-3]):[0-5]\d$/;
+function rosterSlotCard(slot,i,edit){
+ const tel=String(slot.phone||'').replace(/[^+\d]/g,'');
+ if(!edit)return `<div class="contact-card"><div><strong>${safe(slot.doctor_name)}</strong><div class="muted tiny">${safe(slot.start)} – ${safe(slot.end)} · ${slot.contact_role==='backup'?'احتياطي':'أساسي'} ${safe(slot.note||'')}</div></div><a href="tel:${safe(tel)}">${safe(slot.phone)}</a></div>`;
+ return `<div class="roster-slot" data-index="${i}"><div class="form-grid">
+ <label>اسم الطبيب<input class="rs-name" value="${safe(slot.doctor_name||'')}" maxlength="140" required></label>
+ <label>رقم الهاتف<input class="rs-phone" value="${safe(slot.phone||'')}" maxlength="40" inputmode="tel" required></label>
+ <label>من الساعة<input class="rs-start" type="time" value="${safe(slot.start||'09:00')}" required></label>
+ <label>حتى الساعة<input class="rs-end" type="time" value="${safe(slot.end||'15:00')}" required></label>
+ <label>نوع المسؤولية<select class="rs-role"><option value="primary" ${slot.contact_role==='primary'?'selected':''}>مسؤول أساسي</option><option value="backup" ${slot.contact_role==='backup'?'selected':''}>احتياطي</option></select></label>
+ <label>ملاحظة (اختياري)<input class="rs-note" value="${safe(slot.note||'')}" maxlength="200"></label></div><button type="button" class="secondary roster-remove" data-index="${i}">حذف هذه الفترة</button></div>`;
+}
+function captureRosterRows(){return Array.from(document.querySelectorAll('.roster-slot')).map(el=>({
+ doctor_name:el.querySelector('.rs-name').value.trim(),phone:el.querySelector('.rs-phone').value.trim(),
+ start:el.querySelector('.rs-start').value,end:el.querySelector('.rs-end').value,
+ contact_role:el.querySelector('.rs-role').value,note:el.querySelector('.rs-note').value.trim()}));}
+function rosterInputValid(rows){for(const r of rows){if(r.doctor_name.length<2||r.phone.length<6||!hhmmRx.test(r.start)||!hhmmRx.test(r.end))throw Error('أكمل اسم الطبيب والهاتف وساعات الفترة');}return rows;}
+function weekDayFromDate(str){const d=new Date(str+'T12:00:00Z');return (d.getUTCDay()+6)%7;}
+async function rosterPage(){
+ const target=rosterEditDept??deptId; if(!rosterEditDept)rosterEditDept=target;
+ const current=await api('/api/rosters/'+target);
+ if(!rosterEditDate)rosterEditDate=current.clinical_date;
+ const day=await api('/api/rosters/'+target+'?day='+encodeURIComponent(rosterEditDate));
+ const weekday=weekDayFromDate(rosterEditDate);
+ const weekly=await api('/api/rosters/'+target+'/weekly/'+weekday);
+ const canManage=me.user.is_admin||directory.memberships.some(m=>m.department_id===target&&m.role==='department_admin');
+ const rows=rosterEditMode==='week'?weekly.slots:day.slots;
+ rosterDraft=rows.map(x=>({...x}));
+ const select=directory.departments.map(d=>`<option value="${d.id}" ${d.id===target?'selected':''}>${safe(fullname(d.id))}</option>`).join('');
+ $content().innerHTML=heading('جدول مسؤولي الاستشارات','يتحدد حسب الساعة، ويدعم أكثر من طبيب في الفترة نفسها')+`
+ <section class="panel"><div class="form-grid"><label>القسم<select id="rosterDept">${select}</select></label>
+ <label>اليوم الطبي (من 09:00 إلى 09:00)<input id="rosterDate" type="date" value="${safe(rosterEditDate)}"></label>
+ <label>طريقة العرض<select id="rosterMode"><option value="day" ${rosterEditMode==='day'?'selected':''}>الجدول الفعلي لهذا اليوم</option><option value="week" ${rosterEditMode==='week'?'selected':''}>الخطة الأسبوعية المتكررة لهذا اليوم</option></select></label></div>
+ <div class="caution">الخطة الأسبوعية تتكرر بنفس اليوم من كل أسبوع. أي تعديل يومي يستبدل خطة ذلك التاريخ فقط. تستطيع إضافة أكثر من طبيب بنفس الساعات، لكن رقم الهاتف لن يُرسل في إشعار شاشة القفل.</div>
+ <h2>المسؤولون حالياً</h2><div class="list">${current.currently_on_duty.length?current.currently_on_duty.map(r=>rosterSlotCard(r,0,false)).join(''):'<div class="empty">لا يوجد مسؤول اتصال مبرمج لهذه الساعة؛ استخدم دليل القسم واتصل مباشرة عند الحاجة.</div>'}</div>
+ ${day.has_day_override?'<div class="caution">هذا اليوم لديه تعديل خاص يتجاوز الجدول الأسبوعي.</div>':''}
+ <h2>${rosterEditMode==='week'?'الخطة الأسبوعية':'مناوبات اليوم المحدد'}</h2>
+ <div id="rosterRows" class="list">${rows.length?rows.map((r,i)=>rosterSlotCard(r,i,canManage)).join(''):'<div class="empty">لا توجد مناوبات محددة لهذه الفترة.</div>'}</div>
+ ${canManage?`<div class="button-row"><button type="button" class="secondary" id="rosterAdd">+ إضافة طبيب / فترة</button><button type="button" class="primary" id="rosterSave">حفظ ${rosterEditMode==='week'?'الجدول الأسبوعي':'التعديل اليومي'}</button>${rosterEditMode==='day'&&day.has_day_override?'<button type="button" class="secondary" id="rosterReset">إلغاء التعديل اليومي والعودة للأسبوعي</button>':''}</div>`:''}
+ <p class="muted tiny">الفترات دون تغطية: ${((rosterEditMode==='week'?weekly:day).gaps||[]).map(g=>safe(g.from)+'–'+safe(g.to)).join('، ')||'لا توجد فجوات'}. هذه الفترات للاتصال فقط ولا تمنع الأطباء المخوّلين من الرد.</p>
+ </section>`;
+ byId('rosterDept').onchange=e=>{rosterEditDept=Number(e.target.value);rosterEditDate='';rosterPage().catch(err=>toast(err.message,true));};
+ byId('rosterDate').onchange=e=>{rosterEditDate=e.target.value;rosterPage().catch(err=>toast(err.message,true));};
+ byId('rosterMode').onchange=e=>{rosterEditMode=e.target.value;rosterPage().catch(err=>toast(err.message,true));};
+ if(!canManage)return;
+ const add=()=>{rosterDraft.push({doctor_name:'',phone:'',start:'09:00',end:'15:00',contact_role:'primary',note:''});draw();};
+ const draw=()=>{const area=byId('rosterRows');area.innerHTML=rosterDraft.map((r,i)=>rosterSlotCard(r,i,true)).join('')||'<div class="empty">لا توجد مناوبات محددة. يمكنك إضافة فترة.</div>';
+  area.querySelectorAll('.roster-remove').forEach(b=>b.onclick=()=>{rosterDraft=captureRosterRows();rosterDraft.splice(Number(b.dataset.index),1);draw();});};
+ byId('rosterAdd').onclick=()=>{rosterDraft=captureRosterRows();add();};
+ byId('rosterSave').onclick=async()=>{try{const slots=rosterInputValid(captureRosterRows());const endpoint=rosterEditMode==='week'?'/api/rosters/'+target+'/weekly/'+weekday:'/api/rosters/'+target+'/day/'+rosterEditDate;
+  await api(endpoint,{method:'PUT',body:{slots}});toast('تم حفظ جدول الاتصال');await rosterPage();}catch(err){toast(err.message,true)}};
+ if(byId('rosterReset'))byId('rosterReset').onclick=async()=>{if(!confirm('إلغاء التعديل الخاص بهذا اليوم والعودة إلى الخطة الأسبوعية؟'))return;try{await api('/api/rosters/'+target+'/day/'+rosterEditDate,{method:'DELETE'});toast('تمت العودة إلى الخطة الأسبوعية');await rosterPage()}catch(err){toast(err.message,true)}};
+}
+
 async function contactsPage(){const target=Number(window.lastContactDepartment||deptId),canManage=directory.memberships.some(m=>m.department_id===target&&m.role==='department_admin');const data=await api('/api/contacts/'+target);
  $content().innerHTML=heading('دليل أطباء الاستشارات','أرقام اختيارية للمساعدة على المتابعة الهاتفية')+`<section class="panel"><label>القسم<select id="contactDept">${directory.departments.map(d=>`<option value="${d.id}">${safe(fullname(d.id))}</option>`).join('')}</select></label><div class="list">${data.length?data.map(c=>`<div class="contact-card"><div><strong>${safe(c.doctor)}</strong><div class="muted tiny">${c.category==='on_call'?'مناوب':c.category==='backup'?'احتياطي':'طبيب مخوّل'} · ${safe(c.note||'')}</div></div><div><a href="tel:${safe(c.phone.replace(/[^+\d]/g,''))}">${safe(c.phone)}</a>${canManage?`<button class="text-btn" data-delcontact="${c.id}">تعطيل</button>`:''}</div></div>`).join(''):'<div class="empty">لم تُضف أرقام تواصل لهذا القسم.</div>'}</div></section>
  ${canManage?`<section class="panel"><h2>إضافة رقم (مسؤول القسم)</h2><form id="addContact" class="form-grid"><label>اسم الطبيب<input name="doctor_name" required></label><label>الهاتف<input name="phone" required placeholder="09xxxxxxxx"></label><label>الصفة<select name="category"><option value="consultant">طبيب مخوّل</option><option value="on_call">مناوب</option><option value="backup">رقم احتياطي</option></select></label><label>ملاحظة<input name="note" placeholder="أوقات الاتصال / الموقع"></label><div class="span2"><button type="submit" class="primary">إضافة الرقم</button></div></form></section>`:''}`;

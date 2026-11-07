@@ -12,3 +12,5 @@
 .analytics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:12px}.mini-hospital{border:1px solid var(--border);border-radius:12px;padding:17px;display:grid;gap:6px}.mini-hospital b{font-size:15px;color:#16465b}.mini-hospital span{font-size:12px;color:#647b8f}.analytics-overflow{overflow-x:auto}.analytics-table{width:100%;border-collapse:collapse;text-align:right;min-width:750px}.analytics-table th,.analytics-table td{border-bottom:1px solid var(--border);padding:11px;white-space:nowrap;font-size:12px}.analytics-table th{background:#f4f8fa;color:#385b6f}
 
 .admin-account{align-items:center}.admin-account .button-row{margin:0}.admin-account .button-row button{font-size:11px}@media(max-width:650px){.admin-account{align-items:stretch;flex-direction:column}}
+
+.roster-slot{border:1px solid #d7e0ea;border-radius:14px;padding:14px;background:#f9fbff;margin:10px 0;} .roster-slot .secondary{margin-top:10px;} .roster-slot input,.roster-slot select{min-height:44px;}

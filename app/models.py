@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from sqlalchemy import ForeignKey, Index, UniqueConstraint, String, DateTime, Integer, Text, Boolean, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
@@ -173,3 +173,34 @@ class NotificationRead(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (UniqueConstraint("notification_id", "user_id"),)
+
+
+class RosterDayOverride(Base):
+    """A day-specific roster overrides the weekly template, even if intentionally empty."""
+    __tablename__ = "roster_day_overrides"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
+    clinical_date: Mapped[date] = mapped_column(index=True)
+    updated_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (UniqueConstraint("department_id", "clinical_date"),)
+
+class RosterSlot(Base):
+    """A time interval offset from 09:00 in the department's clinical day."""
+    __tablename__ = "roster_slots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(12)) # weekly or daily
+    weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clinical_date: Mapped[date | None] = mapped_column(nullable=True)
+    start_minute: Mapped[int] = mapped_column(Integer) # 0..1439, relative to 09:00
+    end_minute: Mapped[int] = mapped_column(Integer) # 1..1440, relative to 09:00
+    doctor_name: Mapped[str] = mapped_column(String(140))
+    phone: Mapped[str] = mapped_column(String(40))
+    contact_role: Mapped[str] = mapped_column(String(20), default="primary")
+    note: Mapped[str] = mapped_column(String(200), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (Index("ix_roster_slot_day", "department_id", "kind", "clinical_date", "active"),)

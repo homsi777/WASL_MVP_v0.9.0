@@ -70,3 +70,41 @@ def test_superadmin_user_and_hospital_modification(setup):
         assert adm.call('PATCH',f'/api/admin/hospitals/{university}',{'name':'مشفى الجامعة التجريبي'}).status_code==200
         assert adm.call('PATCH',f'/api/admin/hospitals/{university}',{'active':False}).status_code==409
     finally:adm.close();ob.close()
+
+
+def test_superadmin_username_change_and_single_department_rule(setup):
+    client,ids=setup
+    with SessionLocal() as db:
+        db.add(User(username='superadmin2',full_name='Admin Trial',password_hash=pwd.hash('Training-Password-123!'),is_admin=True));db.commit()
+        ob_id=db.scalar(select(User).where(User.username=='ob')).id
+        neph_id=db.scalar(select(User).where(User.username=='neph')).id
+    adm=Actor(client,'superadmin2',ids['ob']);ob=Actor(client,'ob',ids['ob']);neph=Actor(client,'neph',ids['neph'])
+    try:
+        # Only Super Admin may rename a login, the account/history stays the same row.
+        assert ob.call('PATCH',f'/api/admin/users/{ob_id}',{'username':'ob_renamed'}).status_code==403
+        r=adm.call('PATCH',f'/api/admin/users/{ob_id}',{'username':'ob_renamed'})
+        assert r.status_code==200,r.text
+        assert adm.call('PATCH',f'/api/admin/users/{neph_id}',{'username':'ob_renamed'}).status_code==409
+        new=TestClient(app)
+        with new:
+            assert new.post('/api/auth/login',json={'username':'ob','password':'Training-Password-123!'}).status_code==401
+            assert new.post('/api/auth/login',json={'username':'ob_renamed','password':'Training-Password-123!'}).status_code==200
+
+        # Super Admin resets any account's password directly.
+        r=adm.call('POST',f'/api/admin/users/{ob_id}/set-password',{'new_password':'New-Reset-Password-2027!'})
+        assert r.status_code==200,r.text
+        with new:
+            assert new.post('/api/auth/login',json={'username':'ob_renamed','password':'Training-Password-123!'}).status_code==401
+            assert new.post('/api/auth/login',json={'username':'ob_renamed','password':'New-Reset-Password-2027!'}).status_code==200
+
+        # A non-admin account is tied to exactly one department: assigning a second
+        # department reassigns it instead of accumulating access to both.
+        mem=adm.call('GET','/api/admin/memberships').json()
+        assert any(m['user_id']==neph_id and m['department_id']==ids['neph'] for m in mem)
+        r=adm.call('POST','/api/admin/memberships',{'user_id':neph_id,'department_id':ids['surg'],'role':'doctor'})
+        assert r.status_code==200,r.text
+        mem=adm.call('GET','/api/admin/memberships').json()
+        active_for_neph=[m for m in mem if m['user_id']==neph_id]
+        assert len(active_for_neph)==1 and active_for_neph[0]['department_id']==ids['surg']
+    finally:
+        adm.close();ob.close();neph.close()

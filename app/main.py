@@ -308,6 +308,10 @@ class PasswordChange(BaseModel):
 @app.post("/api/auth/change-password")
 def change_password(data: PasswordChange, req: Request, db: Session=Depends(get_db)):
     user = writing_access(req,db)
+    # Per clinical governance decision: only Super Admin accounts manage their own
+    # password. Doctor and department-admin credentials are issued and rotated
+    # exclusively from the Super Admin panel (POST /api/admin/users/{id}/set-password).
+    admin_only(user)
     try:
         verified = pwd.verify(user.password_hash, data.current_password)
     except (VerifyMismatchError, VerificationError):
@@ -984,6 +988,7 @@ def admin_users(req:Request,db:Session=Depends(get_db)):
     return [{**user_data(u),"active":u.active} for u in db.scalars(select(User).order_by(User.full_name))]
 
 class AdminUserEdit(BaseModel):
+    username: str | None = Field(default=None, min_length=3, max_length=80)
     full_name: str | None = Field(default=None, min_length=3, max_length=140)
     active: bool | None = None
     is_admin: bool | None = None
@@ -996,6 +1001,15 @@ def admin_edit_user(target_id:int,data:AdminUserEdit,req:Request,db:Session=Depe
     if target.id==actor.id and (data.active is False or data.is_admin is False):
         fail(409,"لا يمكن إيقاف حسابك أو سحب صلاحية الإدارة من نفسك")
     updates=[]
+    if data.username is not None:
+        new_username=data.username.strip().lower()
+        if not re.fullmatch(r"[a-z0-9._-]{3,80}",new_username):fail(422,"اسم الدخول يجب أن يكون لاتينياً")
+        if new_username!=target.username:
+            if db.scalar(select(User).where(User.username==new_username,User.id!=target.id)):
+                fail(409,"اسم الدخول مستخدم مسبقاً")
+            target.username=new_username;updates.append("username")
+            # The identity changed; force a fresh login everywhere with the new name.
+            for sess in db.scalars(select(LoginSession).where(LoginSession.user_id==target.id)).all():db.delete(sess)
     if data.full_name is not None:
         target.full_name=clean(data.full_name,140);updates.append("name")
     if data.active is not None and data.active!=target.active:
@@ -1268,10 +1282,19 @@ def admin_list_memberships(req:Request,db:Session=Depends(get_db)):
 
 @app.post("/api/admin/memberships")
 def admin_membership(data:NewMembership,req:Request,db:Session=Depends(get_db)):
+    """Clinical governance rule: a Doctor/Department-Admin account is tied to exactly
+    one department. Super Admin accounts are exempt (they need no department at all).
+    Assigning a non-admin account to a new department reassigns it — the previous
+    department membership is deactivated, never left active alongside the new one."""
     user=writing_access(req,db);admin_only(user)
     u=db.get(User,data.user_id);d=db.get(Department,data.department_id)
     if not u or not d:fail(404,"المستخدم أو القسم غير موجود")
     existing=db.scalar(select(Membership).where(Membership.user_id==u.id,Membership.department_id==d.id))
+    if not u.is_admin:
+        others=db.scalars(select(Membership).where(Membership.user_id==u.id,Membership.department_id!=d.id,Membership.active==True)).all()
+        for other in others:
+            other.active=False
+            audit(db,user.id,"membership_reassigned_away",u.id,"dept="+str(other.department_id))
     if existing:
         existing.active=True;existing.role=data.role
     else:db.add(Membership(user_id=u.id,department_id=d.id,role=data.role))

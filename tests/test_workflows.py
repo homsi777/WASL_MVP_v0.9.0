@@ -160,15 +160,26 @@ def test_dashboard_filters_password_change_and_missing_department(setup):
         assert client.get('/api/dashboard').status_code==401
         # Authenticated but no department header should produce 400 (not 500).
         assert intern.client.get('/api/dashboard').status_code==400
+        # Self-service password change is Super Admin only; a non-admin account is
+        # rejected regardless of whether the current password supplied is correct.
         bad=ob.call('POST','/api/auth/change-password',{'current_password':'nope','new_password':'Even-Better-Password-2027!'})
         assert bad.status_code==403
-        good=ob.call('POST','/api/auth/change-password',{'current_password':'Training-Password-123!','new_password':'Even-Better-Password-2027!'})
-        assert good.status_code==200
+        still_blocked=ob.call('POST','/api/auth/change-password',{'current_password':'Training-Password-123!','new_password':'Even-Better-Password-2027!'})
+        assert still_blocked.status_code==403
         assert ob.call('GET','/api/dashboard').status_code==200
-        new=TestClient(app)
-        with new:
-            assert new.post('/api/auth/login',json={'username':'ob','password':'Training-Password-123!'}).status_code==401
-            assert new.post('/api/auth/login',json={'username':'ob','password':'Even-Better-Password-2027!'}).status_code==200
+        with SessionLocal() as db:
+            db.add(User(username='superadmin_pwtest',full_name='Admin PW Test',password_hash=pwd.hash('Training-Password-123!'),is_admin=True))
+            db.commit()
+        adm=Actor(client,'superadmin_pwtest',ids['ob'])
+        try:
+            good=adm.call('POST','/api/auth/change-password',{'current_password':'Training-Password-123!','new_password':'Even-Better-Password-2027!'})
+            assert good.status_code==200,good.text
+            new=TestClient(app)
+            with new:
+                assert new.post('/api/auth/login',json={'username':'superadmin_pwtest','password':'Training-Password-123!'}).status_code==401
+                assert new.post('/api/auth/login',json={'username':'superadmin_pwtest','password':'Even-Better-Password-2027!'}).status_code==200
+        finally:
+            adm.close()
     finally:
         ob.close();intern.close()
 

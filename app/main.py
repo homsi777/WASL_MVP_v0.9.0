@@ -1254,6 +1254,18 @@ def admin_user(data:NewUser,req:Request,db:Session=Depends(get_db)):
     db.add(u);db.flush();audit(db,user.id,"user_created",u.id);db.commit()
     return {"id":u.id}
 
+@app.get("/api/admin/memberships")
+def admin_list_memberships(req:Request,db:Session=Depends(get_db)):
+    """Super Admin overview: which user accounts belong to which department, and with
+    what role. Passwords are Argon2-hashed and can never be displayed in plain text,
+    by design — use POST /api/admin/users/{id}/set-password to assign a new one."""
+    actor=get_user(req,db);admin_only(actor)
+    rows=db.scalars(select(Membership).where(Membership.active==True)).all()
+    users={u.id:u for u in db.scalars(select(User)).all()}
+    return [{"user_id":m.user_id,"username":users[m.user_id].username,"full_name":users[m.user_id].full_name,
+             "user_active":users[m.user_id].active,"department_id":m.department_id,"role":m.role}
+            for m in rows if m.user_id in users]
+
 @app.post("/api/admin/memberships")
 def admin_membership(data:NewMembership,req:Request,db:Session=Depends(get_db)):
     user=writing_access(req,db);admin_only(user)

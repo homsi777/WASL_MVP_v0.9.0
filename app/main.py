@@ -1009,6 +1009,24 @@ def admin_edit_user(target_id:int,data:AdminUserEdit,req:Request,db:Session=Depe
     db.commit()
     return {"ok":True,"updated":updates}
 
+class AdminSetPassword(BaseModel):
+    new_password: str = Field(min_length=14, max_length=120)
+
+@app.post("/api/admin/users/{target_id}/set-password")
+def admin_set_password(target_id:int,data:AdminSetPassword,req:Request,db:Session=Depends(get_db)):
+    """Super Admin sets/resets any account's password. All of that account's active
+    sessions are revoked so the new password takes effect immediately."""
+    actor=writing_access(req,db);admin_only(actor)
+    target=db.get(User,target_id)
+    if not target:fail(404,"المستخدم غير موجود")
+    if len(set(data.new_password))<8:fail(422,"كلمة المرور الجديدة ضعيفة جداً")
+    target.password_hash=pwd.hash(data.new_password)
+    for sess in db.scalars(select(LoginSession).where(LoginSession.user_id==target.id)).all():
+        db.delete(sess)
+    audit(db,actor.id,"admin_password_reset",target.id)
+    db.commit()
+    return {"ok":True}
+
 class AdminHospitalEdit(BaseModel):
     name:str|None=Field(default=None,min_length=2,max_length=150)
     active:bool|None=None
